@@ -1,0 +1,230 @@
+import React, { useEffect, useMemo, useRef, useState } from "react";
+
+// ✅ Componente React com painel lateral + pré-visualização do Drag & Drop
+// - Layout com sidebar à esquerda (controles) e preview à direita
+// - Lógica de drag & drop inspirada no seu código original
+// - Botões: Validar, Embaralhar, Resetar
+// - Totalmente client-side; usa dados simulados para visualização
+
+const COLORS = [
+  "#043372",
+  "#0095e8",
+  "#f4bc12",
+  "#411596",
+  "#5360EA",
+  "#FF3737",
+  "#007bbc",
+  "#333333",
+];
+
+function shuffle<T>(arr: T[]): T[] {
+  return [...arr].sort(() => Math.random() - 0.5);
+}
+
+function useShuffledColors(len: number) {
+  return useMemo(() => shuffle(COLORS).slice(0, len), [len]);
+}
+
+export default function DnDPreview() {
+  const [seed, setSeed] = useState(1);
+  const [result, setResult] = useState<{ correct: number; total: number } | null>(null);
+
+  // Dados simulados (como se viessem do RG do Bubble)
+  const baseItems = useMemo(
+    () => [
+      { id: "q1", text: "Gato", audio: "" },
+      { id: "q2", text: "Cachorro", audio: "" },
+      { id: "q3", text: "Pássaro", audio: "" },
+      { id: "q4", text: "Peixe", audio: "" },
+    ],
+    []
+  );
+
+  // Estado do tabuleiro (slots e blocos de áudio)
+  const [audioOrder, setAudioOrder] = useState<string[]>([]);
+  const [targetOrder, setTargetOrder] = useState<string[]>([]);
+  const [placed, setPlaced] = useState<Record<string, string | null>>({}); // slotId -> audioId
+
+  const colors = useShuffledColors(baseItems.length);
+
+  // Embaralha sempre que seed muda
+  useEffect(() => {
+    const ids = baseItems.map((i) => i.id);
+    const aud = shuffle(ids);
+    const targ = shuffle(ids);
+    setAudioOrder(aud);
+    setTargetOrder(targ);
+    setPlaced(Object.fromEntries(targ.map((id) => [id, null])));
+    setResult(null);
+  }, [seed, baseItems]);
+
+  const itemsById = useMemo(
+    () => Object.fromEntries(baseItems.map((it) => [it.id, it])),
+    [baseItems]
+  );
+
+  // Drag handlers
+  function onDragStart(e: React.DragEvent<HTMLDivElement>, audioId: string) {
+    e.dataTransfer.setData("text/plain", audioId);
+  }
+
+  function onDropSlot(e: React.DragEvent<HTMLDivElement>, slotId: string) {
+    e.preventDefault();
+    const audioId = e.dataTransfer.getData("text/plain");
+    if (!audioId) return;
+
+    // Não permitir dois slots com o mesmo audioId
+    setPlaced((prev) => {
+      const next = { ...prev };
+      // remove de outro slot, se já estiver
+      for (const k of Object.keys(next)) {
+        if (next[k] === audioId) next[k] = null;
+      }
+      // aplica no slot atual se estiver vazio
+      if (!next[slotId]) next[slotId] = audioId;
+      return next;
+    });
+    setResult(null);
+  }
+
+  function onValidate() {
+    let correct = 0;
+    const total = targetOrder.length;
+    for (const slotId of targetOrder) {
+      if (placed[slotId] === slotId) correct += 1;
+    }
+    setResult({ correct, total });
+  }
+
+  function onResetBoard() {
+    setPlaced(Object.fromEntries(targetOrder.map((id) => [id, null])));
+    setResult(null);
+  }
+
+  function onReshuffle() {
+    setSeed((s) => s + 1);
+  }
+
+  return (
+    <div className="w-full h-full grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-4 p-4">
+      {/* Sidebar */}
+      <aside className="rounded-2xl border bg-white p-4 shadow-sm space-y-4">
+        <div className="space-y-1">
+          <h2 className="text-xl font-semibold">Painel de Controle</h2>
+          <p className="text-sm text-gray-600">
+            Use os botões para validar, embaralhar ou resetar o exercício.
+          </p>
+        </div>
+        <div className="flex flex-col gap-2">
+          <button onClick={onValidate} className="px-4 py-2 rounded-xl border shadow hover:shadow-md transition">
+            ✅ Validar
+          </button>
+          <button onClick={onReshuffle} className="px-4 py-2 rounded-xl border shadow hover:shadow-md transition">
+            🔀 Embaralhar
+          </button>
+          <button onClick={onResetBoard} className="px-4 py-2 rounded-xl border shadow hover:shadow-md transition">
+            ♻️ Resetar
+          </button>
+        </div>
+
+        <div className="pt-2 border-t space-y-2">
+          <h3 className="font-medium">Status</h3>
+          {result ? (
+            <div className="text-sm">
+              {result.correct === result.total ? (
+                <span className="text-green-600 font-medium">Tudo correto ({result.correct}/{result.total})</span>
+              ) : (
+                <span className="text-amber-600 font-medium">{result.correct}/{result.total} corretos</span>
+              )}
+            </div>
+          ) : (
+            <div className="text-sm text-gray-500">Aguardando validação…</div>
+          )}
+        </div>
+      </aside>
+
+      {/* Preview */}
+      <section className="rounded-2xl border bg-white p-4 shadow-sm overflow-auto">
+        <div className="flex items-start justify-center gap-6 flex-wrap">
+          {/* Coluna de áudios */}
+          <div className="flex flex-col gap-3 p-4 border rounded-xl min-w-[216px] bg-slate-50">
+            {audioOrder.map((id, idx) => (
+              <div
+                key={id}
+                className="audio-block"
+                draggable
+                onDragStart={(e) => onDragStart(e, id)}
+                style={{ backgroundColor: colors[idx % colors.length] }}
+                title={`Arraste para o texto correspondente`}
+              >
+                <button onClick={(e) => { e.stopPropagation(); /* Simulação de áudio */ }}>
+                  🔊
+                </button>
+              </div>
+            ))}
+          </div>
+
+          {/* Coluna de slots + textos */}
+          <div className="flex flex-col gap-4 p-4 border rounded-xl bg-white">
+            {targetOrder.map((slotId) => (
+              <div key={slotId} className="flex items-center gap-3 h-[60px]">
+                {/* Slot */}
+                <div
+                  className={`target-slot ${placed[slotId] ? "filled" : ""} ${
+                    result ? (placed[slotId] === slotId ? "correct" : placed[slotId] ? "wrong" : "") : ""
+                  }`}
+                  onDragOver={(e) => e.preventDefault()} 
+                  onDrop={(e) => onDropSlot(e, slotId)}
+                />
+                {/* Texto */}
+                <div className="min-w-[240px] text-base">{itemsById[slotId]?.text}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* Estilos locais compatíveis com o original */}
+      <style>{`
+        .audio-block {
+          width: 180px;
+          height: 56px;
+          border-radius: 10px;
+          border: solid 2px rgba(0,0,0,0);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          cursor: grab;
+          font-size: 24px;
+          user-select: none;
+          color: white;
+          padding: 0.5rem;
+          box-sizing: border-box;
+        }
+        .audio-block button {
+          font-size: 28px;
+          background: none;
+          border: none;
+          cursor: pointer;
+          color: white;
+        }
+        .target-slot {
+          width: 180px;
+          height: 60px;
+          border: 2px dashed #ccc;
+          border-radius: 12px;
+          background-color: white;
+          transition: background 0.2s, border 0.3s ease;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          box-sizing: border-box;
+          flex-shrink: 0;
+        }
+        .target-slot.filled { background-color: #eef; border: 2px solid #888; }
+        .target-slot.wrong  { border: 2px solid red !important; }
+        .target-slot.correct{ border: 2px solid green !important; }
+      `}</style>
+    </div>
+  );
+}

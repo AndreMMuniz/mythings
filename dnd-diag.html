@@ -1,0 +1,223 @@
+<div id="quiz-wrapper" style="
+  display: flex; align-items: flex-start; justify-content: center; align-items: stretch;
+  gap: 24px; flex-wrap: nowrap; width: 100%; max-width: 1000px; margin: 0 auto;
+">
+  <!-- Coluna de áudios -->
+  <div id="audio-column" style="
+    display: flex; flex-direction: column; gap: 20px; padding: 1rem; border: 1px solid #ccc;
+    border-radius: 10px; min-width: 216px; background-color: #fafafa; flex: 0 0 200px;
+    min-height: 100%; box-sizing: border-box;
+  "></div>
+
+  <!-- Coluna de slots + textos -->
+  <div id="text-column-wrapper" style="
+    display: flex; flex-direction: column; gap: 16px; padding: 1rem; border: 1px solid #ccc;
+    border-radius: 10px; background-color: #fff; width: fit-content; max-width: 100%; box-sizing: border-box;
+  ">
+    <div id="text-column" style="display: flex; flex-direction: column; gap: 16px;"></div>
+  </div>
+</div>
+
+<div style="margin-top: 2em; text-align: center;">
+  <p id="feedback" style="margin-top: 1em; font-weight: bold;"></p>
+</div>
+
+<style>
+  .audio-block {
+    width: 180px; height: 56px; border-radius: 10px; border: solid 2px transparent;
+    display:flex; align-items:center; justify-content:center; cursor: grab; font-size: 24px;
+    user-select: none; color: white; padding: .5rem; box-sizing: border-box;
+  }
+  .audio-block button { font-size: 28px; background: none; border: none; cursor: pointer; color: white; }
+
+  .target-slot {
+    width: 180px; height: 60px; border: 2px dashed #ccc; border-radius: 12px; background: #fff;
+    transition: background .2s, border .3s ease; display:flex; align-items:center; justify-content:center;
+    box-sizing:border-box; flex-shrink:0;
+  }
+  .target-slot.filled { background-color: #eef; border: 2px solid #888; }
+  .target-slot.wrong  { border: 2px solid red !important; }
+  .target-slot.correct{ border: 2px solid green !important; }
+
+  .quiz-row { display:flex; align-items:center; gap:1rem; height:60px; white-space:nowrap; }
+  .quiz-text { font-size: 1.1rem; }
+</style>
+
+<script>
+(function () {
+  // Namespace global seguro
+  window.DNDQUIZ = window.DNDQUIZ || {};
+  const Q = window.DNDQUIZ;
+
+  Q.building   = Q.building   || false;
+  Q.signature  = Q.signature  || "";
+  Q.debounceId = Q.debounceId || null;
+
+  Q.makeSignature = function () {
+    const els = Array.from(document.querySelectorAll('.quiz-item'));
+    if (!els.length) return "";
+    return els.map(el => `${el.dataset.id}::${el.dataset.text}::${el.dataset.audio}`).join('||');
+  };
+
+  Q.initQuiz = function () {
+    if (Q.building) return;
+    Q.building = true;
+
+    const rawItems = Array.from(document.querySelectorAll('.quiz-item'));
+    if (rawItems.length < 1) { Q.building = false; return; }
+
+    const allowedColors = ["#043372","#0095e8","#f4bc12","#411596","#5360EA","#FF3737","#007bbc","#333333"];
+    let shuffledColors = [...allowedColors].sort(() => Math.random() - 0.5);
+    let colorIndex = 0;
+
+    const items = rawItems.map(el => {
+      if (colorIndex >= shuffledColors.length) {
+        shuffledColors = [...allowedColors].sort(() => Math.random() - 0.5);
+        colorIndex = 0;
+      }
+      return {
+        id: el.dataset.id,
+        text: el.dataset.text,
+        audio: el.dataset.audio,
+        color: shuffledColors[colorIndex++]
+      };
+    });
+
+    const allReady = items.every(i => i.id && i.text && i.audio);
+    if (!allReady) { Q.building = false; return; }
+
+    const audioColumn = document.getElementById('audio-column');
+    const textColumn  = document.getElementById('text-column');
+    if (!audioColumn || !textColumn) { Q.building = false; return; }
+
+    audioColumn.innerHTML = '';
+    textColumn.innerHTML  = '';
+
+    const shuffledAudio   = [...items].sort(() => Math.random() - 0.5);
+    const shuffledTargets = [...items].sort(() => Math.random() - 0.5);
+
+    // blocos de áudio (drag)
+    shuffledAudio.forEach(item => {
+      const div = document.createElement('div');
+      div.className = 'audio-block';
+      div.style.backgroundColor = item.color;
+      div.draggable = true;
+      div.dataset.id = item.id;
+      div.innerHTML = `<button onclick="event.stopPropagation(); new Audio('${item.audio}').play()">🔊</button>`;
+      div.addEventListener('dragstart', e => e.dataTransfer.setData('text/plain', item.id));
+      audioColumn.appendChild(div);
+    });
+
+    // slots + textos (drop)
+    shuffledTargets.forEach(item => {
+      const row = document.createElement('div'); row.className = 'quiz-row';
+
+      const slot = document.createElement('div');
+      slot.className = 'target-slot';
+      slot.dataset.correctId = item.id;
+      slot.dataset.text = item.text;
+
+      slot.ondragover = e => e.preventDefault();
+      slot.ondrop = e => {
+        e.preventDefault();
+        const droppedId = e.dataTransfer.getData('text/plain');
+        const dragged = document.querySelector(`.audio-block[data-id="${droppedId}"]`);
+        if (!dragged || slot.querySelector('.audio-block')) return;
+
+        // garante 1-para-1
+        document.querySelectorAll('.target-slot').forEach(other => {
+          if (other !== slot && other.querySelector(`[data-id="${droppedId}"]`)) {
+            other.innerHTML = ''; other.classList.remove('filled','wrong','correct');
+          }
+        });
+
+        slot.innerHTML = '';
+        slot.appendChild(dragged);
+        slot.classList.add('filled');
+      };
+
+      const textLabel = document.createElement('div');
+      textLabel.textContent = item.text;
+      textLabel.style.minWidth = '240px';
+
+      row.appendChild(slot);
+      row.appendChild(textLabel);
+      textColumn.appendChild(row);
+    });
+
+    Q.signature = Q.makeSignature();
+    Q.building = false;
+  };
+
+  // 👉 Publicador robusto para o JS2B dnd_is_correct
+  function publishIsCorrect(isCorrect) {
+    // Diagnóstico no console
+    console.log("[DnD] isCorrect =", isCorrect, "| bubble_fn_dnd_is_correct =", typeof window.bubble_fn_dnd_is_correct);
+
+    // 1) Se o elemento JS2B (Function name: dnd_is_correct) existe, publique BOOLEAN
+    if (typeof window.bubble_fn_dnd_is_correct === "function") {
+      try { window.bubble_fn_dnd_is_correct(isCorrect); } catch (e) { console.warn("JS2B boolean falhou:", e); }
+      // 2) Alguns setups aceitam melhor "yes"/"no" — tentamos também
+      try { window.bubble_fn_dnd_is_correct(isCorrect ? "yes" : "no"); } catch (e) { /* ignore */ }
+    } else {
+      // Se não existir, deixe um alerta no console para checagem de nome/posição
+      console.warn("⚠️ JS2B com Function name 'dnd_is_correct' não encontrado na página.");
+    }
+  }
+
+  Q.checkAnswers = function () {
+    const slots = document.querySelectorAll('.target-slot');
+    let correct = 0;
+
+    slots.forEach(slot => {
+      const expectedId = slot.dataset.correctId;
+      const dropped = slot.querySelector('.audio-block');
+      slot.classList.remove('wrong','correct');
+
+      if (dropped) {
+        if (dropped.dataset.id === expectedId) { correct++; slot.classList.add('correct'); }
+        else { slot.classList.add('wrong'); }
+      }
+    });
+
+    const total = slots.length;
+    const isCorrect = (total > 0 && correct === total);
+
+    const fb = document.getElementById('feedback');
+    if (fb) {
+      fb.innerText = isCorrect
+        ? `🎉 Tudo correto (${correct}/${total}).`
+        : `⚠️ Existem erros (${correct}/${total}).`;
+      fb.style.color = isCorrect ? 'green' : 'darkorange';
+    }
+
+    publishIsCorrect(isCorrect);
+    return isCorrect;
+  };
+
+  // Expor para o workflow (Run JavaScript chama checkAnswers();)
+  window.checkAnswers = function(){ return Q.checkAnswers(); };
+  window.reloadQuiz   = function(){
+    const fb = document.getElementById('feedback'); if (fb) fb.textContent = '';
+    Q.signature = "";
+    Q.initQuiz();
+  };
+
+  // Auto‑refresh quando mudar a página do RG (conjunto de .quiz-item muda)
+  if (Q.rgObserver) { try { Q.rgObserver.disconnect(); } catch (e) {} }
+  Q.rgObserver = new MutationObserver(() => {
+    if (Q.debounceId) clearTimeout(Q.debounceId);
+    Q.debounceId = setTimeout(() => {
+      const sig = Q.makeSignature();
+      if (sig && sig !== Q.signature) window.reloadQuiz();
+    }, 100);
+  });
+  Q.rgObserver.observe(document.body, { childList: true, subtree: true });
+
+  // Primeira montagem
+  document.addEventListener('DOMContentLoaded', () => {
+    setTimeout(() => Q.initQuiz(), 80);
+  });
+
+})();
+</script>
