@@ -1,4 +1,4 @@
-<div id="quiz-wrapper" style="
+<div id="quiz-wrapper" data-exercise-id="[Parent group's Dnd Exercise's unique id]" style="
   display: flex; align-items: flex-start; justify-content: center; align-items: stretch;
   gap: 24px; flex-wrap: nowrap; width: 100%; max-width: 1000px; margin: 0 auto;
 ">
@@ -17,6 +17,9 @@
     <div id="text-column" style="display: flex; flex-direction: column; gap: 16px;"></div>
   </div>
 </div>
+
+<!-- Text oculto que o Bubble preenche com o JSON salvo -->
+<div id="dnd-state-source" style="display:none;">[Parent group's Dnd Exercise's state_json]</div>
 
 <div style="margin-top: 2em; text-align: center;">
   <p id="feedback" style="margin-top: 1em; font-weight: bold;"></p>
@@ -53,12 +56,79 @@
   Q.signature  = Q.signature  || "";
   Q.debounceId = Q.debounceId || null;
 
+  // === Helpers de estado ===
+  Q.getExerciseId = function() {
+    const wrap = document.getElementById('quiz-wrapper');
+    return wrap?.dataset?.exerciseId || null;
+  };
+
   Q.makeSignature = function () {
     const els = Array.from(document.querySelectorAll('.quiz-item'));
     if (!els.length) return "";
     return els.map(el => `${el.dataset.id}::${el.dataset.text}::${el.dataset.audio}`).join('||');
   };
 
+  Q.captureState = function() {
+    // retorna { exerciseId, pairs: [{slotId, audioId|null}] }
+    const exerciseId = Q.getExerciseId();
+    const slots = Array.from(document.querySelectorAll('.target-slot'));
+    const pairs = slots.map(slot => {
+      const slotId = slot.dataset.correctId;
+      const dropped = slot.querySelector('.audio-block');
+      return { slotId, audioId: dropped ? dropped.dataset.id : null };
+    });
+    return { exerciseId, pairs };
+  };
+
+  Q.publishState = function() {
+    const state = Q.captureState();
+    try {
+      if (typeof window.bubble_fn_dnd_state === 'function') {
+        window.bubble_fn_dnd_state(JSON.stringify(state));
+      }
+    } catch(e) {
+      console.warn('Falha ao publicar dnd_state:', e);
+    }
+  };
+
+  Q.restoreState = function(stateJson) {
+    if (!stateJson) return;
+
+    let parsed = null;
+    try { parsed = JSON.parse(stateJson); } catch(e){ return; }
+    if (!parsed || !Array.isArray(parsed.pairs)) return;
+
+    // Mapa rápido: audioId -> elemento .audio-block
+    const audioMap = {};
+    document.querySelectorAll('.audio-block').forEach(div => {
+      audioMap[div.dataset.id] = div;
+    });
+
+    // Para cada par, se houver audioId, colocar no slot certo
+    parsed.pairs.forEach(({ slotId, audioId }) => {
+      const slot = document.querySelector(`.target-slot[data-correct-id="${slotId}"]`);
+      if (!slot) return;
+
+      // limpa slot atual
+      slot.innerHTML = '';
+      slot.classList.remove('filled','wrong','correct');
+
+      if (audioId && audioMap[audioId]) {
+        // remover de onde estiver
+        document.querySelectorAll('.target-slot').forEach(other => {
+          if (other !== slot && other.querySelector(`[data-id="${audioId}"]`)) {
+            other.innerHTML = '';
+            other.classList.remove('filled','wrong','correct');
+          }
+        });
+        // inserir
+        slot.appendChild(audioMap[audioId]);
+        slot.classList.add('filled');
+      }
+    });
+  };
+
+  // === Montagem DnD ===
   Q.initQuiz = function () {
     if (Q.building) return;
     Q.building = true;
@@ -75,12 +145,7 @@
         shuffledColors = [...allowedColors].sort(() => Math.random() - 0.5);
         colorIndex = 0;
       }
-      return {
-        id: el.dataset.id,
-        text: el.dataset.text,
-        audio: el.dataset.audio,
-        color: shuffledColors[colorIndex++]
-      };
+      return { id: el.dataset.id, text: el.dataset.text, audio: el.dataset.audio, color: shuffledColors[colorIndex++] };
     });
 
     const allReady = items.every(i => i.id && i.text && i.audio);
@@ -90,13 +155,14 @@
     const textColumn  = document.getElementById('text-column');
     if (!audioColumn || !textColumn) { Q.building = false; return; }
 
+    // Limpa UI
     audioColumn.innerHTML = '';
     textColumn.innerHTML  = '';
 
     const shuffledAudio   = [...items].sort(() => Math.random() - 0.5);
     const shuffledTargets = [...items].sort(() => Math.random() - 0.5);
 
-    // blocos de áudio (drag)
+    // Blocos de áudio (drag)
     shuffledAudio.forEach(item => {
       const div = document.createElement('div');
       div.className = 'audio-block';
@@ -108,7 +174,7 @@
       audioColumn.appendChild(div);
     });
 
-    // slots + textos (drop)
+    // Slots + textos (drop)
     shuffledTargets.forEach(item => {
       const row = document.createElement('div'); row.className = 'quiz-row';
 
@@ -124,7 +190,7 @@
         const dragged = document.querySelector(`.audio-block[data-id="${droppedId}"]`);
         if (!dragged || slot.querySelector('.audio-block')) return;
 
-        // garante 1-para-1
+        // 1 para 1
         document.querySelectorAll('.target-slot').forEach(other => {
           if (other !== slot && other.querySelector(`[data-id="${droppedId}"]`)) {
             other.innerHTML = ''; other.classList.remove('filled','wrong','correct');
@@ -134,6 +200,9 @@
         slot.innerHTML = '';
         slot.appendChild(dragged);
         slot.classList.add('filled');
+
+        // 👉 publicar estado após cada drop
+        Q.publishState();
       };
 
       const textLabel = document.createElement('div');
@@ -145,26 +214,19 @@
       textColumn.appendChild(row);
     });
 
+    // Atualiza assinatura
     Q.signature = Q.makeSignature();
     Q.building = false;
+
+    // 👉 restaurar estado se houver JSON salvo
+    const source = document.getElementById('dnd-state-source');
+    const saved = source ? (source.textContent || source.innerText || '').trim() : '';
+    if (saved) {
+      Q.restoreState(saved);
+    }
   };
 
-  // 👉 Publicador robusto para o JS2B dnd_is_correct
-  function publishIsCorrect(isCorrect) {
-    // Diagnóstico no console
-    console.log("[DnD] isCorrect =", isCorrect, "| bubble_fn_dnd_is_correct =", typeof window.bubble_fn_dnd_is_correct);
-
-    // 1) Se o elemento JS2B (Function name: dnd_is_correct) existe, publique BOOLEAN
-    if (typeof window.bubble_fn_dnd_is_correct === "function") {
-      try { window.bubble_fn_dnd_is_correct(isCorrect); } catch (e) { console.warn("JS2B boolean falhou:", e); }
-      // 2) Alguns setups aceitam melhor "yes"/"no" — tentamos também
-      try { window.bubble_fn_dnd_is_correct(isCorrect ? "yes" : "no"); } catch (e) { /* ignore */ }
-    } else {
-      // Se não existir, deixe um alerta no console para checagem de nome/posição
-      console.warn("⚠️ JS2B com Function name 'dnd_is_correct' não encontrado na página.");
-    }
-  }
-
+  // Validação (mantém sua versão, caso use no seu botão Bubble)
   Q.checkAnswers = function () {
     const slots = document.querySelectorAll('.target-slot');
     let correct = 0;
@@ -173,7 +235,6 @@
       const expectedId = slot.dataset.correctId;
       const dropped = slot.querySelector('.audio-block');
       slot.classList.remove('wrong','correct');
-
       if (dropped) {
         if (dropped.dataset.id === expectedId) { correct++; slot.classList.add('correct'); }
         else { slot.classList.add('wrong'); }
@@ -191,11 +252,10 @@
       fb.style.color = isCorrect ? 'green' : 'darkorange';
     }
 
-    publishIsCorrect(isCorrect);
     return isCorrect;
   };
 
-  // Expor para o workflow (Run JavaScript chama checkAnswers();)
+  // Expor funções globais
   window.checkAnswers = function(){ return Q.checkAnswers(); };
   window.reloadQuiz   = function(){
     const fb = document.getElementById('feedback'); if (fb) fb.textContent = '';
@@ -203,7 +263,7 @@
     Q.initQuiz();
   };
 
-  // Auto‑refresh quando mudar a página do RG (conjunto de .quiz-item muda)
+  // Auto‑refresh quando mudar a página do RG
   if (Q.rgObserver) { try { Q.rgObserver.disconnect(); } catch (e) {} }
   Q.rgObserver = new MutationObserver(() => {
     if (Q.debounceId) clearTimeout(Q.debounceId);
