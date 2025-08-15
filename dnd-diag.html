@@ -1,283 +1,189 @@
 <div id="quiz-wrapper" data-exercise-id="[Parent group's Dnd Exercise's unique id]" style="
-  display: flex; align-items: flex-start; justify-content: center; align-items: stretch;
-  gap: 24px; flex-wrap: nowrap; width: 100%; max-width: 1000px; margin: 0 auto;
+  display:flex; align-items:flex-start; justify-content:center; align-items:stretch;
+  gap:24px; flex-wrap:nowrap; width:100%; max-width:1000px; margin:0 auto;
 ">
-  <!-- Coluna de áudios -->
-  <div id="audio-column" style="
-    display: flex; flex-direction: column; gap: 20px; padding: 1rem; border: 1px solid #ccc;
-    border-radius: 10px; min-width: 216px; background-color: #fafafa; flex: 0 0 200px;
-    min-height: 100%; box-sizing: border-box;
-  "></div>
-
-  <!-- Coluna de slots + textos -->
-  <div id="text-column-wrapper" style="
-    display: flex; flex-direction: column; gap: 16px; padding: 1rem; border: 1px solid #ccc;
-    border-radius: 10px; background-color: #fff; width: fit-content; max-width: 100%; box-sizing: border-box;
-  ">
-    <div id="text-column" style="display: flex; flex-direction: column; gap: 16px;"></div>
+  <div id="audio-column" style="display:flex; flex-direction:column; gap:20px; padding:1rem; border:1px solid #ccc; border-radius:10px; min-width:216px; background-color:#fafafa; flex:0 0 200px; min-height:100%; box-sizing:border-box;"></div>
+  <div id="text-column-wrapper" style="display:flex; flex-direction:column; gap:16px; padding:1rem; border:1px solid #ccc; border-radius:10px; background-color:#fff; width:fit-content; max-width:100%; box-sizing:border-box;">
+    <div id="text-column" style="display:flex; flex-direction:column; gap:16px;"></div>
   </div>
 </div>
 
-<!-- Text oculto que o Bubble preenche com o JSON salvo -->
-<div id="dnd-state-source" style="display:none;">[Parent group's Dnd Exercise's state_json]</div>
-
-<div style="margin-top: 2em; text-align: center;">
-  <p id="feedback" style="margin-top: 1em; font-weight: bold;"></p>
+<div style="margin-top:2em; text-align:center;">
+  <p id="feedback" style="margin-top:1em; font-weight:bold;"></p>
 </div>
 
 <style>
-  .audio-block {
-    width: 180px; height: 56px; border-radius: 10px; border: solid 2px transparent;
-    display:flex; align-items:center; justify-content:center; cursor: grab; font-size: 24px;
-    user-select: none; color: white; padding: .5rem; box-sizing: border-box;
-  }
-  .audio-block button { font-size: 28px; background: none; border: none; cursor: pointer; color: white; }
-
-  .target-slot {
-    width: 180px; height: 60px; border: 2px dashed #ccc; border-radius: 12px; background: #fff;
-    transition: background .2s, border .3s ease; display:flex; align-items:center; justify-content:center;
-    box-sizing:border-box; flex-shrink:0;
-  }
-  .target-slot.filled { background-color: #eef; border: 2px solid #888; }
-  .target-slot.wrong  { border: 2px solid red !important; }
-  .target-slot.correct{ border: 2px solid green !important; }
-
+  .audio-block { width:180px; height:56px; border-radius:10px; border:solid 2px transparent; display:flex; align-items:center; justify-content:center; cursor:grab; font-size:24px; user-select:none; color:white; padding:.5rem; box-sizing:border-box; }
+  .audio-block button { font-size:28px; background:none; border:none; cursor:pointer; color:white; }
+  .target-slot { width:180px; height:60px; border:2px dashed #ccc; border-radius:12px; background:#fff; transition:background .2s, border .3s ease; display:flex; align-items:center; justify-content:center; box-sizing:border-box; flex-shrink:0; }
+  .target-slot.filled { background-color:#eef; border: 2px solid #888; }
+  .target-slot.wrong  { border:2px solid red !important; }
+  .target-slot.correct{ border:2px solid green !important; }
   .quiz-row { display:flex; align-items:center; gap:1rem; height:60px; white-space:nowrap; }
-  .quiz-text { font-size: 1.1rem; }
 </style>
 
 <script>
-(function () {
-  // Namespace global seguro
+(function(){
   window.DNDQUIZ = window.DNDQUIZ || {};
   const Q = window.DNDQUIZ;
+  Q.mem = Q.mem || {};
+  Q._debounce = null;
+  Q._building = false;
+  Q._observer = Q._observer || null;
 
-  Q.building   = Q.building   || false;
-  Q.signature  = Q.signature  || "";
-  Q.debounceId = Q.debounceId || null;
+  const WRAP = document.getElementById('quiz-wrapper');
+  const audioCol = document.getElementById('audio-column');
+  const textCol  = document.getElementById('text-column');
+  const COLORS = ["#043372","#0095e8","#f4bc12","#411596","#5360EA","#FF3737","#007bbc","#333333"];
 
-  // === Helpers de estado ===
-  Q.getExerciseId = function() {
-    const wrap = document.getElementById('quiz-wrapper');
-    return wrap?.dataset?.exerciseId || null;
-  };
+  function shuffle(arr){ return [...arr].sort(() => Math.random() - 0.5); }
+  function getExerciseId() {
+  // 1) tenta do wrapper
+  let id = (WRAP?.dataset?.exerciseId || "").trim();
 
-  Q.makeSignature = function () {
-    const els = Array.from(document.querySelectorAll('.quiz-item'));
-    if (!els.length) return "";
-    return els.map(el => `${el.dataset.id}::${el.dataset.text}::${el.dataset.audio}`).join('||');
-  };
+  // Se o wrapper trouxe um literal com colchetes (não resolvido), ignore
+  if (id.includes('[') || id.includes(']')) id = "";
 
-  Q.captureState = function() {
-    // retorna { exerciseId, pairs: [{slotId, audioId|null}] }
-    const exerciseId = Q.getExerciseId();
-    const slots = Array.from(document.querySelectorAll('.target-slot'));
-    const pairs = slots.map(slot => {
-      const slotId = slot.dataset.correctId;
-      const dropped = slot.querySelector('.audio-block');
+  if (id) return id;
+
+  // 2) tenta do primeiro .quiz-item (Bubble resolve aqui)
+  const first = document.querySelector('.quiz-item');
+  if (first && first.dataset.exercise) return first.dataset.exercise.trim();
+
+  // 3) fallback: vazio (vamos operar sem filtro)
+  return "";
+}
+  function getStateNode(){ return document.getElementById('dnd-state-source'); }
+  function readDBStateJSON(){ const n = getStateNode(); if (!n) return ""; return (n.textContent || n.innerText || "").trim(); }
+
+  function getSourceItems(exerciseId) {
+    let els;
+    if (exerciseId) { els = Array.from(document.querySelectorAll(`.quiz-item[data-exercise="${exerciseId}"]`)); if (!els.length) els = Array.from(document.querySelectorAll('.quiz-item')); }
+    else { els = Array.from(document.querySelectorAll('.quiz-item')); }
+    return els.map(el => ({ id:(el.dataset.id||"").trim(), text:(el.dataset.text||"").trim(), audio:(el.dataset.audio||"").trim() })).filter(i => i.id && i.text && i.audio);
+  }
+
+  function makeSignature(items){ const sorted=[...items].sort((a,b)=>a.id>b.id?1:-1); return sorted.map(i=>`${i.id}|${i.text}|${i.audio}`).join('||'); }
+
+  function ensureLayoutState(exId, items){
+    const sig = makeSignature(items); const entry = Q.mem[exId] || {};
+    if (entry.signature !== sig) {
+      const ids = items.map(i=>i.id);
+      const audioOrder  = shuffle(ids);
+      const targetOrder = shuffle(ids);
+      const colorMap = {}; audioOrder.forEach((aid, idx) => colorMap[aid] = COLORS[idx % COLORS.length]);
+      Q.mem[exId] = { signature:sig, audioOrder, targetOrder, colorMap, pairs:[] };
+    }
+    return Q.mem[exId];
+  }
+
+function tryLoadPairsFromDB(){
+  const raw = readDBStateJSON();
+  if (!raw) return null;
+
+  // Caso 1: JSON normal → parse direto
+  try {
+    const obj = JSON.parse(raw);
+    if (Array.isArray(obj)) return obj;
+    if (obj && Array.isArray(obj.pairs)) return obj.pairs;
+  } catch(e){}
+
+  // Caso 2: JSON "duplamente codificado" (com \" ... \")
+  // Ex.: "\"{\\\"pairs\\\":[...] }\"" ou "{\"pairs\":[...]}"
+  try {
+    const once = JSON.parse(raw);     // remove as barras invertidas
+    const obj2 = typeof once === 'string' ? JSON.parse(once) : once;
+    if (Array.isArray(obj2)) return obj2;
+    if (obj2 && Array.isArray(obj2.pairs)) return obj2.pairs;
+  } catch(e){}
+
+  return null;
+}
+  function rememberPairs(exId){
+    const pairs = Array.from(document.querySelectorAll('.target-slot')).map(slot => {
+      const slotId = slot.dataset.correctId; const dropped = slot.querySelector('.audio-block');
       return { slotId, audioId: dropped ? dropped.dataset.id : null };
     });
-    return { exerciseId, pairs };
-  };
+    if (!Q.mem[exId]) Q.mem[exId] = {}; Q.mem[exId].pairs = pairs;
+    try { if (typeof window.bubble_fn_dnd_state === 'function') { window.bubble_fn_dnd_state(JSON.stringify({ exerciseId:exId, pairs })); } } catch(e){}
+  }
 
-  Q.publishState = function() {
-    const state = Q.captureState();
-    try {
-      if (typeof window.bubble_fn_dnd_state === 'function') {
-        window.bubble_fn_dnd_state(JSON.stringify(state));
-      }
-    } catch(e) {
-      console.warn('Falha ao publicar dnd_state:', e);
-    }
-  };
+  function restorePairs(exId){
+    const entry = Q.mem[exId] || {};
+    let pairs = entry.pairs;
+    if (!pairs || !pairs.length) { const fromDB = tryLoadPairsFromDB(); if (fromDB && fromDB.length) { pairs = fromDB; entry.pairs = fromDB; Q.mem[exId] = entry; } }
+    if (!pairs || !pairs.length) return;
 
-  Q.restoreState = function(stateJson) {
-    if (!stateJson) return;
+    const audioMap = {}; document.querySelectorAll('.audio-block').forEach(div => audioMap[div.dataset.id] = div);
 
-    let parsed = null;
-    try { parsed = JSON.parse(stateJson); } catch(e){ return; }
-    if (!parsed || !Array.isArray(parsed.pairs)) return;
-
-    // Mapa rápido: audioId -> elemento .audio-block
-    const audioMap = {};
-    document.querySelectorAll('.audio-block').forEach(div => {
-      audioMap[div.dataset.id] = div;
-    });
-
-    // Para cada par, se houver audioId, colocar no slot certo
-    parsed.pairs.forEach(({ slotId, audioId }) => {
-      const slot = document.querySelector(`.target-slot[data-correct-id="${slotId}"]`);
-      if (!slot) return;
-
-      // limpa slot atual
-      slot.innerHTML = '';
-      slot.classList.remove('filled','wrong','correct');
-
+    pairs.forEach(({slotId, audioId}) => {
+      const slot = document.querySelector(`.target-slot[data-correct-id="${slotId}"]`); if (!slot) return;
+      slot.innerHTML = ''; slot.classList.remove('filled','wrong','correct');
       if (audioId && audioMap[audioId]) {
-        // remover de onde estiver
-        document.querySelectorAll('.target-slot').forEach(other => {
-          if (other !== slot && other.querySelector(`[data-id="${audioId}"]`)) {
-            other.innerHTML = '';
-            other.classList.remove('filled','wrong','correct');
-          }
-        });
-        // inserir
-        slot.appendChild(audioMap[audioId]);
-        slot.classList.add('filled');
+        document.querySelectorAll('.target-slot').forEach(other => { if (other !== slot && other.querySelector(`[data-id="${audioId}"]`)) { other.innerHTML = ''; other.classList.remove('filled','wrong','correct'); } });
+        slot.appendChild(audioMap[audioId]); slot.classList.add('filled');
       }
     });
-  };
+  }
 
-  // === Montagem DnD ===
-  Q.initQuiz = function () {
-    if (Q.building) return;
-    Q.building = true;
+  function buildUI(){
+    if (Q._building) return; Q._building = true;
+    try {
+      if (!audioCol || !textCol) return;
+      const EXERCISE_ID = getExerciseId();
+      const items = getSourceItems(EXERCISE_ID); if (!items.length) return;
+      const entry = ensureLayoutState(EXERCISE_ID, items);
+      audioCol.innerHTML=''; textCol.innerHTML='';
 
-    const rawItems = Array.from(document.querySelectorAll('.quiz-item'));
-    if (rawItems.length < 1) { Q.building = false; return; }
+      entry.audioOrder.forEach(aid => {
+        const item = items.find(it => it.id === aid); if (!item) return;
+        const div = document.createElement('div'); div.className='audio-block'; div.style.backgroundColor = entry.colorMap[aid] || COLORS[0];
+        div.draggable = true; div.dataset.id = item.id;
+        div.innerHTML = `<button onclick="event.stopPropagation(); new Audio('${item.audio}').play()">🔊</button>`;
+        div.addEventListener('dragstart', e => e.dataTransfer.setData('text/plain', item.id));
+        audioCol.appendChild(div);
+      });
 
-    const allowedColors = ["#043372","#0095e8","#f4bc12","#411596","#5360EA","#FF3737","#007bbc","#333333"];
-    let shuffledColors = [...allowedColors].sort(() => Math.random() - 0.5);
-    let colorIndex = 0;
+      entry.targetOrder.forEach(tid => {
+        const item = items.find(it => it.id === tid); if (!item) return;
+        const row = document.createElement('div'); row.className = 'quiz-row';
+        const slot = document.createElement('div'); slot.className='target-slot'; slot.dataset.correctId=item.id; slot.dataset.text=item.text;
+        slot.ondragover = e => e.preventDefault();
+        slot.ondrop = e => {
+          e.preventDefault();
+          const droppedId = e.dataTransfer.getData('text/plain');
+          const dragged = document.querySelector(`.audio-block[data-id="${droppedId}"]`);
+          if (!dragged || slot.querySelector('.audio-block')) return;
+          document.querySelectorAll('.target-slot').forEach(other => { if (other !== slot && other.querySelector(`[data-id="${droppedId}"]`)) { other.innerHTML=''; other.classList.remove('filled','wrong','correct'); } });
+          slot.innerHTML=''; slot.appendChild(dragged); slot.classList.add('filled');
+          rememberPairs(EXERCISE_ID);
+        };
+        const label = document.createElement('div'); label.textContent=item.text; label.style.minWidth='240px';
+        row.appendChild(slot); row.appendChild(label); textCol.appendChild(row);
+      });
 
-    const items = rawItems.map(el => {
-      if (colorIndex >= shuffledColors.length) {
-        shuffledColors = [...allowedColors].sort(() => Math.random() - 0.5);
-        colorIndex = 0;
-      }
-      return { id: el.dataset.id, text: el.dataset.text, audio: el.dataset.audio, color: shuffledColors[colorIndex++] };
+      restorePairs(EXERCISE_ID);
+    } finally { setTimeout(() => { Q._building = false; }, 0); }
+  }
+
+  function checkAnswers(){
+    const slots=document.querySelectorAll('.target-slot'); let correct=0;
+    slots.forEach(slot => { const expectedId=slot.dataset.correctId; const dropped=slot.querySelector('.audio-block'); slot.classList.remove('wrong','correct');
+      if (dropped) { if (dropped.dataset.id === expectedId) { correct++; slot.classList.add('correct'); } else { slot.classList.add('wrong'); } }
     });
-
-    const allReady = items.every(i => i.id && i.text && i.audio);
-    if (!allReady) { Q.building = false; return; }
-
-    const audioColumn = document.getElementById('audio-column');
-    const textColumn  = document.getElementById('text-column');
-    if (!audioColumn || !textColumn) { Q.building = false; return; }
-
-    // Limpa UI
-    audioColumn.innerHTML = '';
-    textColumn.innerHTML  = '';
-
-    const shuffledAudio   = [...items].sort(() => Math.random() - 0.5);
-    const shuffledTargets = [...items].sort(() => Math.random() - 0.5);
-
-    // Blocos de áudio (drag)
-    shuffledAudio.forEach(item => {
-      const div = document.createElement('div');
-      div.className = 'audio-block';
-      div.style.backgroundColor = item.color;
-      div.draggable = true;
-      div.dataset.id = item.id;
-      div.innerHTML = `<button onclick="event.stopPropagation(); new Audio('${item.audio}').play()">🔊</button>`;
-      div.addEventListener('dragstart', e => e.dataTransfer.setData('text/plain', item.id));
-      audioColumn.appendChild(div);
-    });
-
-    // Slots + textos (drop)
-    shuffledTargets.forEach(item => {
-      const row = document.createElement('div'); row.className = 'quiz-row';
-
-      const slot = document.createElement('div');
-      slot.className = 'target-slot';
-      slot.dataset.correctId = item.id;
-      slot.dataset.text = item.text;
-
-      slot.ondragover = e => e.preventDefault();
-      slot.ondrop = e => {
-        e.preventDefault();
-        const droppedId = e.dataTransfer.getData('text/plain');
-        const dragged = document.querySelector(`.audio-block[data-id="${droppedId}"]`);
-        if (!dragged || slot.querySelector('.audio-block')) return;
-
-        // 1 para 1
-        document.querySelectorAll('.target-slot').forEach(other => {
-          if (other !== slot && other.querySelector(`[data-id="${droppedId}"]`)) {
-            other.innerHTML = ''; other.classList.remove('filled','wrong','correct');
-          }
-        });
-
-        slot.innerHTML = '';
-        slot.appendChild(dragged);
-        slot.classList.add('filled');
-
-        // 👉 publicar estado após cada drop
-        Q.publishState();
-      };
-
-      const textLabel = document.createElement('div');
-      textLabel.textContent = item.text;
-      textLabel.style.minWidth = '240px';
-
-      row.appendChild(slot);
-      row.appendChild(textLabel);
-      textColumn.appendChild(row);
-    });
-
-    // Atualiza assinatura
-    Q.signature = Q.makeSignature();
-    Q.building = false;
-
-    // 👉 restaurar estado se houver JSON salvo
-    const source = document.getElementById('dnd-state-source');
-    const saved = source ? (source.textContent || source.innerText || '').trim() : '';
-    if (saved) {
-      Q.restoreState(saved);
-    }
-  };
-
-  // Validação (mantém sua versão, caso use no seu botão Bubble)
-  Q.checkAnswers = function () {
-    const slots = document.querySelectorAll('.target-slot');
-    let correct = 0;
-
-    slots.forEach(slot => {
-      const expectedId = slot.dataset.correctId;
-      const dropped = slot.querySelector('.audio-block');
-      slot.classList.remove('wrong','correct');
-      if (dropped) {
-        if (dropped.dataset.id === expectedId) { correct++; slot.classList.add('correct'); }
-        else { slot.classList.add('wrong'); }
-      }
-    });
-
-    const total = slots.length;
-    const isCorrect = (total > 0 && correct === total);
-
-    const fb = document.getElementById('feedback');
-    if (fb) {
-      fb.innerText = isCorrect
-        ? `🎉 Tudo correto (${correct}/${total}).`
-        : `⚠️ Existem erros (${correct}/${total}).`;
-      fb.style.color = isCorrect ? 'green' : 'darkorange';
-    }
-
+    const total=slots.length; const isCorrect=(total>0 && correct===total);
+    const fb=document.getElementById('feedback'); if (fb) { fb.innerText=isCorrect?`🎉 Tudo correto (${correct}/${total}).`:`⚠️ Existem erros (${correct}/${total}).`; fb.style.color=isCorrect?'green':'darkorange'; }
+    try { if (typeof window.bubble_fn_dnd_is_correct === 'function') { window.bubble_fn_dnd_is_correct(isCorrect); } } catch(e){}
     return isCorrect;
-  };
+  }
 
-  // Expor funções globais
-  window.checkAnswers = function(){ return Q.checkAnswers(); };
-  window.reloadQuiz   = function(){
-    const fb = document.getElementById('feedback'); if (fb) fb.textContent = '';
-    Q.signature = "";
-    Q.initQuiz();
-  };
+  window.reloadQuiz   = function(){ const fb=document.getElementById('feedback'); if (fb) fb.textContent=''; buildUI(); };
+  window.checkAnswers = function(){ return checkAnswers(); };
 
-  // Auto‑refresh quando mudar a página do RG
-  if (Q.rgObserver) { try { Q.rgObserver.disconnect(); } catch (e) {} }
-  Q.rgObserver = new MutationObserver(() => {
-    if (Q.debounceId) clearTimeout(Q.debounceId);
-    Q.debounceId = setTimeout(() => {
-      const sig = Q.makeSignature();
-      if (sig && sig !== Q.signature) window.reloadQuiz();
-    }, 100);
-  });
-  Q.rgObserver.observe(document.body, { childList: true, subtree: true });
+  if (Q._observer) { try { Q._observer.disconnect(); } catch(e){} }
+  Q._observer = new MutationObserver(() => { if (Q._building) return; clearTimeout(Q._debounce); Q._debounce = setTimeout(buildUI, 200); });
+  Q._observer.observe(document.body, { childList:true, subtree:true });
 
-  // Primeira montagem
-  document.addEventListener('DOMContentLoaded', () => {
-    setTimeout(() => Q.initQuiz(), 80);
-  });
-
+  document.addEventListener('DOMContentLoaded', () => setTimeout(buildUI, 150));
 })();
 </script>
